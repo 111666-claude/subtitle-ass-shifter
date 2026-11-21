@@ -29,6 +29,10 @@ ass-shifter [path] -t [shift ms]
     -er --endRegexp    end at regular expression
     -enc --encoding    force input encoding (e.g. gbk, shift_jis); skips auto-detection
     -d --dry           dry run
+    -x --extract       extract cues intersecting --start/--end instead of shifting
+    -o --output        output file or directory for --extract (default: stdout; '-' is stdout)
+    -clip --clip       with --extract, clip cues to the range
+    -rebase --rebase   with --extract, make timestamps relative to --start
 ```
 
 Use `--encoding` when auto-detection picks the wrong charset (common with GBK/Shift_JIS subtitles misread as Latin-1).
@@ -67,8 +71,7 @@ From 0:06:13.00 to end, 1629 lines shifted -3200ms
 [Info] 13 subtitle files updated.
 ```
 
-Dry run would NOT change your file. Good for test.
-```bash
+Dry run would NOT change your file. Good for test.```bash
 ass-shifter ../Better.Call.Saul/S06 -sr "第.季\s*第.+集" -t 3234 --dry
 
 Better.Call.Saul.S06E01.2022.1080p.WEB-DL.x265.10bit.ass
@@ -90,3 +93,49 @@ From 0:05:17.70 to end, 1651 lines shifted 3234ms
 
 [Info] Dry run, no file changes.
 ```
+
+## Range export (`--extract`)
+
+After cutting the opening from a movie you can export only the subtitles for
+the part you keep, instead of shifting the whole file. `--extract` keeps every
+cue that intersects `--start`..`--end` and leaves the timing untouched unless
+you ask for it.
+
+```bash
+# Keep cues from 12:00 to 28:00, unchanged timestamps, write a new file
+ass-shifter movie.ass -x -s 0:12:00 -e 0:28:00 -o movie.clip.ass
+
+# Cut the cues at the range edges and rebase timestamps so 12:00 becomes 0:00
+ass-shifter movie.srt -x -s 0:12:00 -e 0:28:00 --clip --rebase -o movie.clip.srt
+
+# Preview to stdout (diagnostics go to stderr, so it can be piped)
+ass-shifter movie.ass -x -s 0:12:00 -e 0:28:00 --clip --rebase > clip.ass
+
+# Whole season: mirror the tree into an output directory
+ass-shifter ./S03 -x -s 0:12:00 -e 0:28:00 --clip --rebase -o ./S03-clip
+```
+
+Behaviour:
+
+- **Intersection is half-open**: a cue ending exactly at `--start`, or starting
+  exactly at `--end`, is not included (a cue with zero duration never matches).
+- **`--clip`** trims cues that cross the boundaries to the range.
+- **`--rebase`** subtracts `--start` from every timestamp. With `--clip` the
+  first cue starts at `0:00:00`. Without `--clip` the tail is left alone and a
+  lead-in overhang is clamped to zero.
+- **ASS** keeps all non-`Dialogue` lines (headers, `[V4+ Styles]`, `Comment:`,
+  etc.) exactly as-is, honours a custom `Format:` line in `[Events]`, and keeps
+  text containing commas and override tags untouched.
+- **SRT** renumbers the kept cues sequentially and preserves trailing position
+  info after the timestamp. Blocks without a timing line are kept verbatim.
+- **Encoding** is detected (or forced with `--encoding`) and the output is
+  written back in that same encoding, including a BOM when the source had one.
+- **Never overwrites the source**: `--output` pointing at the input path (or a
+  symlink to it) is rejected. `--extract` never modifies the input file.
+- **Errors are explicit**: empty range (`--start == --end`), reversed range,
+  negative times, malformed time strings, and bad cue timestamps all exit
+  non-zero without writing anything. A range with no matching cues produces an
+  empty output file (or nothing on stdout) and still succeeds.
+- Directory input requires `--output`; subtitle files are mirrored into that
+  directory, non-subtitle files are skipped, and `--output -` is rejected.
+- `--dry` prints what would be extracted without writing anything.

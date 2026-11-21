@@ -21,7 +21,11 @@ var supportTypes map[string]subtitle = map[string]subtitle{
 
 var (
 	inputPath     string
+	outputPath    string
 	shift         int
+	extractMode   bool
+	clipCues      bool
+	rebaseCues    bool
 	gFrom         int
 	gTo           int
 	fromStr       string
@@ -53,6 +57,10 @@ func init() {
 	flaggy.String(&toRegexp, "er", "endRegexp", "end at regular expression")
 	flaggy.String(&encOverr, "enc", "encoding", "force input encoding (e.g. gbk, shift_jis); skips auto-detection")
 	flaggy.Bool(&dry, "d", "dry", "dry run")
+	flaggy.Bool(&extractMode, "x", "extract", "extract cues intersecting --start/--end instead of shifting")
+	flaggy.String(&outputPath, "o", "output", "output file or directory for --extract (default: stdout; '-' is stdout)")
+	flaggy.Bool(&clipCues, "clip", "clip", "with --extract, clip cues to the range")
+	flaggy.Bool(&rebaseCues, "rebase", "rebase", "with --extract, make timestamps relative to --start")
 	flaggy.SetVersion(version)
 	flaggy.Parse()
 }
@@ -145,24 +153,34 @@ func timeInclude(t int, from int, to int) bool {
 var fileUpdated = 0
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	if extractMode {
+		return runExtract()
+	}
+	if clipCues || rebaseCues || outputPath != "" {
+		fmt.Println("[Warning] --clip, --rebase and --output are ignored without --extract")
+	}
 	if shift == 0 {
 		fmt.Println("shift 0ms means nothing to do.")
-		return
+		return nil
 	}
 	if err := parseFromTo(); err != nil {
-		fmt.Println(err)
-		return
+		return err
 	}
 
 	inputPath, _ = filepath.Abs(inputPath)
 	_, err := os.Stat(inputPath)
 	if err != nil {
-		fmt.Println(err)
-		return
+		return err
 	}
 	if err := initInputEncoding(encOverr); err != nil {
-		fmt.Println(err)
-		return
+		return err
 	}
 	if inputEncoding != nil {
 		fmt.Printf("Using encoding %s (override)\n", inputEncName)
@@ -174,6 +192,7 @@ func main() {
 	} else {
 		fmt.Printf("\n[Info] %d subtitle files updated.\n", fileUpdated)
 	}
+	return nil
 }
 
 func initInputEncoding(label string) error {
@@ -192,11 +211,18 @@ func initInputEncoding(label string) error {
 }
 
 func walker(realPath string, f os.FileInfo, err error) error {
-	ext := filepath.Ext(f.Name())
-	if f.Name()[0] == '.' {
-		return filepath.SkipDir
+	if err != nil {
+		fmt.Println(err)
+		return nil
 	}
-	ext = strings.ToLower(ext)
+	if f.IsDir() {
+		if strings.HasPrefix(f.Name(), ".") {
+			return filepath.SkipDir
+		}
+		return nil
+	}
+
+	ext := strings.ToLower(filepath.Ext(f.Name()))
 
 	if subs, ok := supportTypes[ext]; ok {
 		subFile, err := os.ReadFile(realPath)
